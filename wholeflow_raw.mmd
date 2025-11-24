@@ -1,0 +1,40 @@
+flowchart TD
+    subgraph media_style_css[media\style.css]
+    end
+    subgraph package_lock_json[package-lock.json]
+    end
+    subgraph package_json[package.json]
+    end
+    subgraph QUICKSTART_md[QUICKSTART.md]
+    end
+    subgraph README_md[README.md]
+        README_md_diagrams["class: diagrams"]
+    end
+    subgraph src_extension_ts[src\extension.ts]
+        src_extension_ts_convertToFlowchart["fn: convertToFlowchart"]
+        src_extension_ts_convertFolderToFlowchart["fn: convertFolderToFlowchart"]
+        src_extension_ts_makeId["fn: makeId"]
+        src_extension_ts_extractImportsAndSymbols["fn: extractImportsAndSymbols"]
+        src_extension_ts_resolveImport["fn: resolveImport"]
+        src_extension_ts_shouldIgnorePath["fn: shouldIgnorePath"]
+        src_extension_ts_getFileExtension["fn: getFileExtension"]
+        src_extension_ts_readFolderRecursive["fn: readFolderRecursive"]
+    end
+    subgraph src_generateFlow_ts[src\generateFlow.ts]
+        src_generateFlow_ts_shouldIgnore["fn: shouldIgnore"]
+        src_generateFlow_ts_getAllFiles["fn: getAllFiles"]
+        src_generateFlow_ts_extractImportsAndSymbols["fn: extractImportsAndSymbols"]
+        src_generateFlow_ts_resolveImport["fn: resolveImport"]
+        src_generateFlow_ts_makeId["fn: makeId"]
+        src_generateFlow_ts_buildMermaid["fn: buildMermaid"]
+        src_generateFlow_ts_main["fn: main"]
+        src_generateFlow_ts_extraction["class: extraction"]
+    end
+    subgraph tsconfig_json[tsconfig.json]
+    end
+    src_extension_ts --> ext_vscode["vscode"]
+    src_extension_ts --> ext_path["path"]
+    src_extension_ts --> ext_fs["fs"]
+    src_extension_ts --> ext_util["util"]
+    src_generateFlow_ts --> ext_fs["fs"]
+    src_generateFlow_ts --> ext_path["path"]

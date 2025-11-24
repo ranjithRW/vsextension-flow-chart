@@ -21,6 +21,10 @@
         "title": "Generate Flow Chart (Workspace)"
       },
       {
+        "command": "codeToFlowchart.exportWorkspace",
+        "title": "Generate Flow Chart & Save SVG"
+      },
+      {
         "command": "codeToFlowchart.generateFolder",
         "title": "Generate Flow Chart (Folder)"
       }

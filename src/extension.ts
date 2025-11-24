@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as util from 'util';
+import { spawn } from 'child_process';
 
 /**
  * File information interface
@@ -483,6 +484,71 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(disposable1, disposable2);
+
+    // Register the command to generate and save SVG directly into the workspace
+    const disposable3 = vscode.commands.registerCommand('codeToFlowchart.exportWorkspace', async () => {
+        // Determine workspace folder (prefer root)
+        let folderUri: vscode.Uri | undefined;
+        if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            folderUri = vscode.workspace.workspaceFolders[0].uri;
+        } else if (vscode.window.activeTextEditor) {
+            const fileUri = vscode.window.activeTextEditor.document.uri;
+            folderUri = vscode.Uri.joinPath(fileUri, '..');
+        } else {
+            const selected = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
+            if (!selected || selected.length === 0) return;
+            folderUri = selected[0];
+        }
+
+        if (!folderUri) {
+            vscode.window.showErrorMessage('No folder found to scan.');
+            return;
+        }
+
+        const folderPath = folderUri.fsPath;
+        const folderName = path.basename(folderPath);
+
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Generating Flowchart and saving SVG', cancellable: false }, async (progress) => {
+            progress.report({ increment: 0, message: 'Reading folder...' });
+            try {
+                const files = await readFolderRecursive(folderPath);
+                if (files.length === 0) {
+                    vscode.window.showWarningMessage('No code files found in the selected folder.');
+                    return;
+                }
+
+                progress.report({ increment: 40, message: `Processing ${files.length} files...` });
+                const mermaidCode = convertFolderToFlowchart(files, folderName);
+
+                // Write the mermaid fenced file into the workspace root
+                const outFile = path.join(folderPath, 'wholeflow.mmd');
+                fs.writeFileSync(outFile, '```mermaid\n' + mermaidCode + '\n```\n', 'utf8');
+
+                progress.report({ increment: 60, message: 'Exporting to SVG...' });
+
+                // Execute the export helper (scripts/export-mermaid.js) using node
+                const exportScript = path.join(context.extensionPath, 'scripts', 'export-mermaid.js');
+
+                await new Promise<void>((resolve, reject) => {
+                    const child = spawn(process.execPath, [exportScript], { cwd: folderPath, stdio: 'inherit', shell: true });
+                    child.on('error', (err) => reject(err));
+                    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error('export failed with code ' + code))));
+                });
+
+                progress.report({ increment: 100, message: 'Opening SVG...' });
+
+                const svgPath = path.join(folderPath, 'wholeflow.svg');
+                const svgUri = vscode.Uri.file(svgPath);
+                await vscode.commands.executeCommand('vscode.open', svgUri);
+
+                vscode.window.showInformationMessage(`Exported flowchart to ${svgPath}`);
+            } catch (err: any) {
+                vscode.window.showErrorMessage('Error exporting flowchart: ' + (err && err.message ? err.message : String(err)));
+            }
+        });
+    });
+
+    context.subscriptions.push(disposable3);
 }
 
 /**

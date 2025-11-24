@@ -258,8 +258,15 @@ function getWebviewContent(mermaidCode: string, webview: vscode.Webview, extensi
     <div class="container">
         <h1>Code Flowchart</h1>
         ${statsHtml}
-        <div class="mermaid">
+        <div id="diagramArea">
+            <div class="mermaid" id="mermaidChart">
 ${mermaidCode}
+            </div>
+            <div style="margin-top:12px; display:flex; gap:8px; align-items:center;">
+                <button id="exportSvgBtn">Show SVG Image / Download</button>
+                <a id="downloadLink" style="display:none;">Download SVG</a>
+            </div>
+            <div id="svgImageContainer" style="margin-top:12px;"></div>
         </div>
     </div>
     <script>
@@ -271,6 +278,60 @@ ${mermaidCode}
                 htmlLabels: true,
                 curve: 'basis'
             }
+        });
+
+        // After Mermaid renders the chart, provide an SVG image view and download link
+        function findRenderedSVG() {
+            const container = document.getElementById('mermaidChart');
+            if (!container) return null;
+            // Mermaid replaces the container content with an SVG element
+            const svg = container.querySelector('svg');
+            return svg;
+        }
+
+        function serializeSvg(svg) {
+            // Inline external fonts/styles if needed (best-effort)
+            const serializer = new XMLSerializer();
+            let source = serializer.serializeToString(svg);
+            // Add name space
+            if(!source.match(/^<svg[^>]+xmlns="http:\/\/www\.w3\.org\/2000\/svg"/)) {
+                source = source.replace(/^<svg/, '<svg xmlns="http://www.w3.org/2000/svg"');
+            }
+            // Add xml declaration
+            source = '<?xml version="1.0" standalone="no"?>\n' + source;
+            return source;
+        }
+
+        function toBase64(str) {
+            return window.btoa(unescape(encodeURIComponent(str)));
+        }
+
+        document.getElementById('exportSvgBtn').addEventListener('click', () => {
+            const svg = findRenderedSVG();
+            if (!svg) {
+                alert('SVG not yet rendered — try again in a second.');
+                return;
+            }
+
+            const svgText = serializeSvg(svg);
+            const base64 = toBase64(svgText);
+            const dataUrl = 'data:image/svg+xml;base64,' + base64;
+
+            // Display as image
+            const container = document.getElementById('svgImageContainer');
+            container.innerHTML = '';
+            const img = document.createElement('img');
+            img.src = dataUrl;
+            img.style.maxWidth = '100%';
+            img.style.border = '1px solid rgba(255,255,255,0.05)';
+            container.appendChild(img);
+
+            // Prepare download link
+            const downloadLink = document.getElementById('downloadLink');
+            downloadLink.href = dataUrl;
+            downloadLink.download = 'wholeflow.svg';
+            downloadLink.textContent = 'Download SVG';
+            downloadLink.style.display = 'inline-block';
         });
     </script>
 </body>
@@ -284,76 +345,49 @@ export function activate(context: vscode.ExtensionContext) {
     console.log('Code to Flowchart extension is now active!');
 
     // Register the command for single file
+    // Default `Generate Flow Chart` now produces a workspace-level diagram (scans project root).
     const disposable1 = vscode.commands.registerCommand('codeToFlowchart.generate', async () => {
-        // Prompt user: current file or whole workspace
-        const pick = await vscode.window.showQuickPick([
-            { label: 'Current File', description: 'Generate flowchart for the active file' },
-            { label: 'Workspace', description: 'Generate flowchart for the entire workspace (project)' }
-        ], { placeHolder: 'Generate flowchart for...' });
+        // Determine workspace folder (prefer root)
+        let folderUri: vscode.Uri | undefined;
+        if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            folderUri = vscode.workspace.workspaceFolders[0].uri;
+        } else if (vscode.window.activeTextEditor) {
+            const fileUri = vscode.window.activeTextEditor.document.uri;
+            folderUri = vscode.Uri.joinPath(fileUri, '..');
+        } else {
+            const selected = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
+            if (!selected || selected.length === 0) return;
+            folderUri = selected[0];
+        }
 
-        if (!pick) return; // cancelled
+        if (!folderUri) {
+            vscode.window.showErrorMessage('No folder found to scan.');
+            return;
+        }
 
-        if (pick.label === 'Workspace') {
-            // Determine workspace folder (prefer root)
-            let folderUri: vscode.Uri | undefined;
-            if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-                folderUri = vscode.workspace.workspaceFolders[0].uri;
-            } else if (vscode.window.activeTextEditor) {
-                const fileUri = vscode.window.activeTextEditor.document.uri;
-                folderUri = vscode.Uri.joinPath(fileUri, '..');
-            } else {
-                const selected = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, canSelectMany: false });
-                if (!selected || selected.length === 0) return;
-                folderUri = selected[0];
-            }
+        const folderPath = folderUri.fsPath;
+        const folderName = path.basename(folderPath);
 
-            if (!folderUri) {
-                vscode.window.showErrorMessage('No folder found to scan.');
-                return;
-            }
-
-            const folderPath = folderUri.fsPath;
-            const folderName = path.basename(folderPath);
-
-            await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Generating Flowchart (Workspace)', cancellable: false }, async (progress) => {
-                progress.report({ increment: 0, message: 'Reading folder...' });
-                try {
-                    const files = await readFolderRecursive(folderPath);
-                    if (files.length === 0) {
-                        vscode.window.showWarningMessage('No code files found in the selected folder.');
-                        return;
-                    }
-                    progress.report({ increment: 50, message: `Processing ${files.length} files...` });
-                    const mermaidCode = convertFolderToFlowchart(files, folderName);
-                    progress.report({ increment: 100, message: 'Rendering flowchart...' });
-
-                    const panel = vscode.window.createWebviewPanel('codeToFlowchart', `Code Flowchart - ${folderName}`, vscode.ViewColumn.Beside, { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] });
-                    panel.webview.html = getWebviewContent(mermaidCode, panel.webview, context.extensionUri, files.length);
-                    panel.onDidDispose(() => { }, null, context.subscriptions);
-                    vscode.window.showInformationMessage(`Flowchart generated for ${files.length} files in ${folderName}`);
-                } catch (error) {
-                    vscode.window.showErrorMessage(`Error generating flowchart: ${error}`);
+        await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: 'Generating Flowchart (Workspace)', cancellable: false }, async (progress) => {
+            progress.report({ increment: 0, message: 'Reading folder...' });
+            try {
+                const files = await readFolderRecursive(folderPath);
+                if (files.length === 0) {
+                    vscode.window.showWarningMessage('No code files found in the selected folder.');
+                    return;
                 }
-            });
-            return;
-        }
+                progress.report({ increment: 50, message: `Processing ${files.length} files...` });
+                const mermaidCode = convertFolderToFlowchart(files, folderName);
+                progress.report({ increment: 100, message: 'Rendering flowchart...' });
 
-        // Default: Current File
-        const editor = vscode.window.activeTextEditor;
-        if (!editor) {
-            vscode.window.showErrorMessage('No active editor found. Please open a file first.');
-            return;
-        }
-        const document = editor.document;
-        const code = document.getText();
-        if (!code || code.trim().length === 0) {
-            vscode.window.showWarningMessage('The active file is empty.');
-            return;
-        }
-        const mermaidCode = convertToFlowchart(code);
-        const panel = vscode.window.createWebviewPanel('codeToFlowchart', `Code Flowchart - ${path.basename(document.fileName)}`, vscode.ViewColumn.Beside, { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] });
-        panel.webview.html = getWebviewContent(mermaidCode, panel.webview, context.extensionUri);
-        panel.onDidDispose(() => { }, null, context.subscriptions);
+                const panel = vscode.window.createWebviewPanel('codeToFlowchart', `Code Flowchart - ${folderName}`, vscode.ViewColumn.Beside, { enableScripts: true, localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')] });
+                panel.webview.html = getWebviewContent(mermaidCode, panel.webview, context.extensionUri, files.length);
+                panel.onDidDispose(() => { }, null, context.subscriptions);
+                vscode.window.showInformationMessage(`Flowchart generated for ${files.length} files in ${folderName}`);
+            } catch (error) {
+                vscode.window.showErrorMessage(`Error generating flowchart: ${error}`);
+            }
+        });
     });
 
     // Register the command for folder

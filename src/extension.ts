@@ -40,31 +40,111 @@ function convertToFlowchart(code: string): string {
  * @returns Mermaid flowchart syntax as a string
  */
 function convertFolderToFlowchart(files: FileInfo[], folderName: string): string {
+    // Build a richer Mermaid graph: each file is a subgraph containing functions/classes
+    // and edges are created for resolved relative imports; external packages are shown as external nodes.
+    const text = files;
+
+    function makeId(s: string) {
+        return s.replace(/[^a-zA-Z0-9_]/g, '_').replace(/^_+/, '');
+    }
+
+    function extractImportsAndSymbols(content: string) {
+        const imports: string[] = [];
+        const functions: string[] = [];
+        const classes: string[] = [];
+
+        const importRe = /import\s+(?:[^'";]+from\s+)?['"]([^'"]+)['"];?/g;
+        let m: RegExpExecArray | null;
+        while ((m = importRe.exec(content)) !== null) {
+            imports.push(m[1]);
+        }
+
+        const requireRe = /require\(['"]([^'"]+)['"]\)/g;
+        while ((m = requireRe.exec(content)) !== null) {
+            imports.push(m[1]);
+        }
+
+        const functionRe = /function\s+([a-zA-Z0-9_]+)\s*\(|const\s+([a-zA-Z0-9_]+)\s*=\s*\(?\s*\)?\s*=>/g;
+        while ((m = functionRe.exec(content)) !== null) {
+            const name = m[1] || m[2];
+            if (name) functions.push(name);
+        }
+
+        const classRe = /class\s+([a-zA-Z0-9_]+)/g;
+        while ((m = classRe.exec(content)) !== null) {
+            classes.push(m[1]);
+        }
+
+        return { imports, functions, classes };
+    }
+
+    function resolveImport(fromFile: string, imp: string): string | null {
+        if (imp.startsWith('.') || imp.startsWith('/')) {
+            const base = path.resolve(path.dirname(fromFile), imp);
+            const candidates = [base, base + '.ts', base + '.js', base + '.tsx', base + '.jsx', path.join(base, 'index.ts'), path.join(base, 'index.js')];
+            for (const c of candidates) {
+                try {
+                    if (fs.existsSync(c) && fs.statSync(c).isFile()) return path.resolve(c);
+                } catch (e) {
+                    // ignore
+                }
+            }
+        }
+        return null;
+    }
+
+    const nodes: { file: FileInfo; imports: string[]; functions: string[]; classes: string[] }[] = [];
+    for (const f of text) {
+        const { imports, functions, classes } = extractImportsAndSymbols(f.content);
+        nodes.push({ file: f, imports, functions, classes });
+    }
+
+    const byResolvedPath = new Map<string, typeof nodes[0]>();
+    for (const n of nodes) {
+        byResolvedPath.set(path.resolve(n.file.path), n);
+    }
+
     let mermaidCode = 'flowchart TD\n';
-    
-    // Start node
-    mermaidCode += `    Start([Folder: ${folderName}]) --> Process1["${files.length} files found"]\n`;
-    
-    // Create nodes for each file
-    files.forEach((file, index) => {
-        const nodeId = `File${index}`;
-        const sanitizedName = file.name.replace(/[^a-zA-Z0-9]/g, '_');
-        const displayName = file.name.length > 30 ? file.name.substring(0, 27) + '...' : file.name;
-        
-        mermaidCode += `    Process1 --> ${nodeId}["${displayName}\\n${file.lineCount} lines"]\n`;
-        
-        // Add file details
-        const detailId = `Detail${index}`;
-        mermaidCode += `    ${nodeId} --> ${detailId}["Processed"]\n`;
-    });
-    
-    // End node
-    mermaidCode += '    ';
-    files.forEach((_, index) => {
-        mermaidCode += `Detail${index} --> `;
-    });
-    mermaidCode += 'End([End])\n';
-    
+
+    // Create subgraphs for files
+    for (const n of nodes) {
+        const id = makeId(n.file.name);
+        mermaidCode += `    subgraph ${id}[${n.file.name}]\n`;
+        for (const fn of n.functions.slice(0, 8)) {
+            const nid = makeId(n.file.name + '_' + fn);
+            mermaidCode += `        ${nid}["fn: ${fn}"]\n`;
+        }
+        for (const c of n.classes.slice(0, 8)) {
+            const cid = makeId(n.file.name + '_' + c);
+            mermaidCode += `        ${cid}["class: ${c}"]\n`;
+        }
+        // fallback node when no symbols found
+        if (n.functions.length === 0 && n.classes.length === 0) {
+            mermaidCode += `        ${id}_file["${path.basename(n.file.name)}\\n${n.file.lineCount} lines"]\n`;
+        }
+        mermaidCode += '    end\n';
+    }
+
+    // Create edges for imports
+    for (const n of nodes) {
+        const fromId = makeId(n.file.name);
+        for (const imp of n.imports) {
+            const resolved = resolveImport(n.file.path, imp);
+            if (resolved) {
+                const target = byResolvedPath.get(path.resolve(resolved));
+                if (target) {
+                    const toId = makeId(target.file.name);
+                    mermaidCode += `    ${fromId} --> ${toId}\n`;
+                }
+            } else {
+                if (!imp.startsWith('.')) {
+                    const extId = makeId('ext_' + imp);
+                    mermaidCode += `    ${fromId} --> ${extId}["${imp}"]\n`;
+                }
+            }
+        }
+    }
+
     return mermaidCode;
 }
 

@@ -335,15 +335,16 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Register the command for folder
     const disposable2 = vscode.commands.registerCommand('codeToFlowchart.generateFolder', async () => {
-        // Get the workspace folder or selected folder
+        // Prefer the workspace root (scan whole project). Fall back to active file's folder or ask the user.
         let folderUri: vscode.Uri | undefined;
-        
-        // Check if a folder is selected in the explorer
-        if (vscode.window.activeTextEditor) {
+
+        if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+            // Use the first workspace folder as the project root
+            folderUri = vscode.workspace.workspaceFolders[0].uri;
+        } else if (vscode.window.activeTextEditor) {
+            // Fallback to the folder of the active file
             const fileUri = vscode.window.activeTextEditor.document.uri;
             folderUri = vscode.Uri.joinPath(fileUri, '..');
-        } else if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-            folderUri = vscode.workspace.workspaceFolders[0].uri;
         } else {
             // Ask user to select a folder
             const selectedFolders = await vscode.window.showOpenDialog({
@@ -352,11 +353,11 @@ export function activate(context: vscode.ExtensionContext) {
                 canSelectMany: false,
                 openLabel: 'Select Folder'
             });
-            
+
             if (!selectedFolders || selectedFolders.length === 0) {
                 return;
             }
-            
+
             folderUri = selectedFolders[0];
         }
 

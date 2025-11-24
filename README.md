@@ -8,6 +8,7 @@ A VS Code extension that converts your code into interactive Mermaid flowcharts.
 - 📊 **Interactive Diagrams**: View flowcharts directly in VS Code using WebView
 - 🚀 **Quick Access**: Generate flowcharts with a single command
 - 🔄 **Multi-language Support**: Works with JavaScript, TypeScript, Python, and any text-based code
+- 📁 **Folder Support**: Generate flowcharts for entire folders, showing all files and their relationships
 
 ## Installation
 
@@ -25,21 +26,46 @@ npm run compile
 4. Press `F5` to open a new Extension Development Host window
 5. In the new window, open any code file
 6. Open the Command Palette (`Ctrl+Shift+P` or `Cmd+Shift+P`)
-7. Run the command: **"Generate Flow Chart"**
+7. Run one of the commands:
+   - **"Generate Flow Chart (Current File)"** - For a single file
+   - **"Generate Flow Chart (Folder)"** - For an entire folder
 
 ## Usage
 
+### Single File Flowchart
+
 1. Open any code file in VS Code
 2. Press `Ctrl+Shift+P` (or `Cmd+Shift+P` on Mac) to open the Command Palette
-3. Type "Generate Flow Chart" and select the command
+3. Type "Generate Flow Chart (Current File)" and select the command
 4. The flowchart will appear in a new panel beside your editor
+
+### Folder Flowchart
+
+1. Open any file in the folder you want to analyze (or just have the workspace open)
+2. Press `Ctrl+Shift+P` (or `Cmd+Shift+P` on Mac) to open the Command Palette
+3. Type "Generate Flow Chart (Folder)" and select the command
+4. The extension will:
+   - Recursively scan all code files in the folder
+   - Ignore common directories (node_modules, .git, etc.)
+   - Generate a flowchart showing all files and their relationships
+   - Display the flowchart in a new panel
+
+**Note**: The folder command will use the current file's folder, workspace folder, or prompt you to select a folder.
 
 ## How It Works
 
+### Single File Mode
 1. The extension reads the entire active file using the VS Code API
 2. The code is passed to a conversion function that generates Mermaid flowchart syntax
 3. The flowchart is rendered in a WebView panel using Mermaid.js
 4. The diagram is displayed interactively in VS Code
+
+### Folder Mode
+1. The extension recursively scans all files in the selected folder
+2. Filters out ignored directories (node_modules, .git, .vscode, etc.)
+3. Processes only text-based code files (JS, TS, Python, etc.)
+4. Generates a flowchart showing all files with their line counts
+5. Displays the folder structure as an interactive diagram
 
 ## Extension Structure
 

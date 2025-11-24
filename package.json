@@ -18,7 +18,11 @@
     "commands": [
       {
         "command": "codeToFlowchart.generate",
-        "title": "Generate Flow Chart"
+        "title": "Generate Flow Chart (Current File)"
+      },
+      {
+        "command": "codeToFlowchart.generateFolder",
+        "title": "Generate Flow Chart (Folder)"
       }
     ]
   },

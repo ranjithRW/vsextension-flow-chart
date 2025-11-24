@@ -18,6 +18,16 @@ h1 {
     font-weight: 600;
 }
 
+.stats {
+    color: var(--vscode-descriptionForeground);
+    margin-bottom: 15px;
+    font-size: 14px;
+    padding: 8px 12px;
+    background-color: var(--vscode-editor-inactiveSelectionBackground);
+    border-radius: 4px;
+    display: inline-block;
+}
+
 .mermaid {
     background-color: var(--vscode-editor-background);
     padding: 20px;

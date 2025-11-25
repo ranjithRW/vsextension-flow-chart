@@ -128,8 +128,20 @@ function convertFolderToFlowchart(files: FileInfo[], folderName: string): string
     }
 
     // Create edges for imports
+    // Track incoming/outgoing edges to identify entry and leaf files
+    const incoming = new Map<string, number>();
+    const outgoing = new Map<string, number>();
     for (const n of nodes) {
         const fromId = makeId(n.file.name);
+        outgoing.set(fromId, 0);
+        incoming.set(fromId, incoming.get(fromId) || 0);
+    }
+
+    // Build adjacency for topological ordering and also render import edges
+    const adjacency = new Map<string, Set<string>>();
+    for (const n of nodes) {
+        const fromId = makeId(n.file.name);
+        if (!adjacency.has(fromId)) adjacency.set(fromId, new Set());
         for (const imp of n.imports) {
             const resolved = resolveImport(n.file.path, imp);
             if (resolved) {
@@ -137,13 +149,79 @@ function convertFolderToFlowchart(files: FileInfo[], folderName: string): string
                 if (target) {
                     const toId = makeId(target.file.name);
                     mermaidCode += `    ${fromId} --> ${toId}\n`;
+                    adjacency.get(fromId)!.add(toId);
+                    outgoing.set(fromId, (outgoing.get(fromId) || 0) + 1);
+                    incoming.set(toId, (incoming.get(toId) || 0) + 1);
                 }
             } else {
                 if (!imp.startsWith('.')) {
                     const extId = makeId('ext_' + imp);
                     mermaidCode += `    ${fromId} --> ${extId}["${imp}"]\n`;
+                    adjacency.get(fromId)!.add(extId);
+                    outgoing.set(fromId, (outgoing.get(fromId) || 0) + 1);
                 }
             }
+        }
+    }
+
+    // Compute a topological-like ordering for files to present a pipeline backbone
+    const inDegreeMap = new Map<string, number>();
+    for (const [k, v] of incoming.entries()) inDegreeMap.set(k, v || 0);
+    // Ensure all nodes present
+    for (const id of adjacency.keys()) if (!inDegreeMap.has(id)) inDegreeMap.set(id, 0);
+
+    const q: string[] = [];
+    for (const [id, deg] of inDegreeMap.entries()) {
+        if ((deg || 0) === 0 && id && id !== '') q.push(id);
+    }
+
+    const topoOrder: string[] = [];
+    while (q.length > 0) {
+        const cur = q.shift()!;
+        topoOrder.push(cur);
+        const neigh = adjacency.get(cur);
+        if (!neigh) continue;
+        for (const nb of neigh) {
+            const curDeg = inDegreeMap.get(nb) || 0;
+            inDegreeMap.set(nb, curDeg - 1);
+            if (curDeg - 1 === 0) q.push(nb);
+        }
+    }
+
+    // If topoOrder doesn't include all (due to cycles), append remaining nodes
+    if (topoOrder.length < nodes.length) {
+        for (const n of nodes) {
+            const id = makeId(n.file.name);
+            if (!topoOrder.includes(id)) topoOrder.push(id);
+        }
+    }
+
+    // Add a dashed pipeline backbone connecting topologically ordered files (limited to avoid clutter)
+    const MAX_PIPE_NODES = 200;
+    const pipelineNodes = topoOrder.slice(0, Math.min(topoOrder.length, MAX_PIPE_NODES));
+    for (let i = 0; i < pipelineNodes.length - 1; i++) {
+        mermaidCode += `    ${pipelineNodes[i]} -.-> ${pipelineNodes[i + 1]}\n`;
+    }
+
+    // Add Start and End nodes to show overall flow from entry points to leaves
+    const startId = 'StartNode';
+    const endId = 'EndNode';
+    mermaidCode += `    ${startId}([Start])\n`;
+    mermaidCode += `    ${endId}([End])\n`;
+
+    // Entry files: files with zero incoming edges
+    for (const n of nodes) {
+        const id = makeId(n.file.name);
+        if (!incoming.get(id) || incoming.get(id) === 0) {
+            mermaidCode += `    ${startId} --> ${id}\n`;
+        }
+    }
+
+    // Leaf files: files with zero outgoing edges
+    for (const n of nodes) {
+        const id = makeId(n.file.name);
+        if (!outgoing.get(id) || outgoing.get(id) === 0) {
+            mermaidCode += `    ${id} --> ${endId}\n`;
         }
     }
 

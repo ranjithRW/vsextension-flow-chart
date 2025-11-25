@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as util from 'util';
 import { spawn } from 'child_process';
+import { promisify } from 'util';
 
 /**
  * File information interface
@@ -274,6 +275,7 @@ ${mermaidCode}
         mermaid.initialize({ 
             startOnLoad: true,
             theme: 'default',
+            maxTextSize: 1000000,
             flowchart: {
                 useMaxWidth: true,
                 htmlLabels: true,
@@ -526,14 +528,8 @@ export function activate(context: vscode.ExtensionContext) {
 
                 progress.report({ increment: 60, message: 'Exporting to SVG...' });
 
-                // Execute the export helper (scripts/export-mermaid.js) using node
-                const exportScript = path.join(context.extensionPath, 'scripts', 'export-mermaid.js');
-
-                await new Promise<void>((resolve, reject) => {
-                    const child = spawn(process.execPath, [exportScript], { cwd: folderPath, stdio: 'inherit', shell: true });
-                    child.on('error', (err) => reject(err));
-                    child.on('close', (code) => (code === 0 ? resolve() : reject(new Error('export failed with code ' + code))));
-                });
+                // Export using an internal helper so the extension works when installed
+                await runExportMermaid(folderPath);
 
                 progress.report({ increment: 100, message: 'Opening SVG...' });
 
@@ -549,6 +545,77 @@ export function activate(context: vscode.ExtensionContext) {
     });
 
     context.subscriptions.push(disposable3);
+}
+
+async function runExportMermaid(folderPath: string): Promise<void> {
+    const fsP = { readFile: util.promisify(fs.readFile), writeFile: util.promisify(fs.writeFile), access: util.promisify(fs.access), unlink: util.promisify(fs.unlink) } as any;
+    const inputFenced = path.join(folderPath, 'wholeflow.mmd');
+    const inputRaw = path.join(folderPath, 'wholeflow_raw.mmd');
+    const outSvg = path.join(folderPath, 'wholeflow.svg');
+
+    if (!fs.existsSync(inputFenced)) {
+        throw new Error('wholeflow.mmd not found in the workspace root. Run generation first.');
+    }
+
+    const fenced = fs.readFileSync(inputFenced, 'utf8');
+    const match = fenced.match(/```\s*mermaid\s*\n([\s\S]*?)\n```/i);
+    let mermaidText = '';
+    if (match && match[1]) mermaidText = match[1];
+    else mermaidText = fenced.replace(/```/g, '').trim();
+
+    if (!mermaidText || mermaidText.trim().length === 0) {
+        throw new Error('No mermaid content found in wholeflow.mmd');
+    }
+
+    fs.writeFileSync(inputRaw, mermaidText, 'utf8');
+
+    // temp config
+    const tempConfig = path.join(folderPath, 'mmdc-temp-config.json');
+    try {
+        fs.writeFileSync(tempConfig, JSON.stringify({ maxTextSize: 1000000 }), 'utf8');
+    } catch (e) {
+        // non-fatal
+    }
+
+    // Try npm exec mmdc first
+    const tryExec = () => new Promise<void>((resolve, reject) => {
+        const child = spawn('npm', ['exec', '--', 'mmdc', '-i', inputRaw, '-o', outSvg, '--configFile', tempConfig], { cwd: folderPath, stdio: 'inherit', shell: true });
+        child.on('error', (err) => reject(err));
+        child.on('close', (code) => code === 0 ? resolve() : reject(new Error('npm exec mmdc failed with code ' + code)));
+    });
+
+    // Try local binary
+    const tryLocal = () => new Promise<void>((resolve, reject) => {
+        const localBin = path.join(folderPath, 'node_modules', '.bin', process.platform === 'win32' ? 'mmdc.cmd' : 'mmdc');
+        if (!fs.existsSync(localBin)) return reject(new Error('Local mmdc not found'));
+        if (process.platform === 'win32') {
+            const cmd = `"${localBin}" -i "${inputRaw}" -o "${outSvg}" --configFile "${tempConfig}"`;
+            const child = spawn('cmd', ['/c', cmd], { cwd: folderPath, stdio: 'inherit', shell: true });
+            child.on('error', (err) => reject(err));
+            child.on('close', (code) => code === 0 ? resolve() : reject(new Error('local mmdc failed with code ' + code)));
+        } else {
+            const child = spawn(localBin, ['-i', inputRaw, '-o', outSvg, '--configFile', tempConfig], { cwd: folderPath, stdio: 'inherit' });
+            child.on('error', (err) => reject(err));
+            child.on('close', (code) => code === 0 ? resolve() : reject(new Error('local mmdc failed with code ' + code)));
+        }
+    });
+
+    try {
+        await tryExec();
+    } catch (e1) {
+        try {
+            await tryLocal();
+        } catch (e2) {
+            // cleanup temp config
+            try { if (fs.existsSync(tempConfig)) fs.unlinkSync(tempConfig); } catch (e) {}
+            throw new Error('Failed to run Mermaid CLI automatically. Install @mermaid-js/mermaid-cli or use npx. ' + (e2 && (e2 as any).message ? (e2 as any).message : String(e2)));
+        }
+    }
+
+    // cleanup temp config
+    try { if (fs.existsSync(tempConfig)) fs.unlinkSync(tempConfig); } catch (e) {}
+
+    return;
 }
 
 /**

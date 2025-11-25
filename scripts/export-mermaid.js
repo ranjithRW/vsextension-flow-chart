@@ -32,34 +32,63 @@ if (!mermaidText || mermaidText.trim().length === 0) {
 fs.writeFileSync(inputRaw, mermaidText, 'utf8');
 console.log('Wrote', inputRaw);
 
-// Run mmdc via npx so users don't have to install globally
-// Try to find a local mmdc binary first
-const localMmdc = path.join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'mmdc.cmd' : 'mmdc');
-if (fs.existsSync(localMmdc)) {
-    console.log('Found local mmdc at', localMmdc);
-    const res = spawnSync(localMmdc, ['-i', inputRaw, '-o', outSvg], { stdio: 'inherit', shell: true });
-    if (res.error) {
-        console.error('Failed to run local mmdc:', res.error);
-        process.exit(1);
-    }
-    if (res.status !== 0) {
-        console.error('mmdc exited with code', res.status);
-        process.exit(res.status || 1);
-    }
-    console.log('Generated SVG:', outSvg);
-    process.exit(0);
+// Create a temporary mermaid config to increase allowed text size
+const tempConfigName = 'mmdc-temp-config.json';
+const tempConfigPath = path.join(root, tempConfigName);
+const mermaidConfig = {
+    maxTextSize: 1000000
+};
+try {
+    fs.writeFileSync(tempConfigPath, JSON.stringify(mermaidConfig), 'utf8');
+    console.log('Wrote temporary mermaid config:', tempConfigPath);
+} catch (e) {
+    console.warn('Could not write temporary mermaid config, continuing without it:', e.message);
 }
 
-// Try using npm exec (more likely present than npx)
+// Run mmdc via npx so users don't have to install globally
+// First try using `npm exec mmdc` (robust when workspace path contains spaces)
 console.log('Trying `npm exec mmdc` (this will download/run the CLI if necessary)...');
-let res = spawnSync('npm', ['exec', '--', 'mmdc', '-i', inputRaw, '-o', outSvg], { stdio: 'inherit', shell: true });
+// prefer passing the temporary config file so mmdc increases maxTextSize
+let res = spawnSync('npm', ['exec', '--', 'mmdc', '-i', inputRaw, '-o', outSvg, '--configFile', tempConfigPath], { stdio: 'inherit', shell: true });
 if (!res.error && res.status === 0) {
     console.log('Generated SVG:', outSvg);
     process.exit(0);
 }
 
+// If npm exec failed, try a local binary if present
+const localMmdc = path.join(root, 'node_modules', '.bin', process.platform === 'win32' ? 'mmdc.cmd' : 'mmdc');
+if (fs.existsSync(localMmdc)) {
+    console.log('Found local mmdc at', localMmdc);
+    if (process.platform === 'win32') {
+        // Use cmd /c with quoted command to handle spaces in path and include config
+        const cmd = `"${localMmdc}" -i "${inputRaw}" -o "${outSvg}" --configFile "${tempConfigPath}"`;
+        res = spawnSync('cmd', ['/c', cmd], { stdio: 'inherit', shell: true });
+    } else {
+        res = spawnSync(localMmdc, ['-i', inputRaw, '-o', outSvg, '--configFile', tempConfigPath], { stdio: 'inherit' });
+    }
+
+    if (res && res.error) {
+        console.error('Failed to run local mmdc:', res.error);
+        process.exit(1);
+    }
+    if (res && res.status === 0) {
+        console.log('Generated SVG:', outSvg);
+        // cleanup temp config
+        try { if (fs.existsSync(tempConfigPath)) fs.unlinkSync(tempConfigPath); } catch (e) {}
+        process.exit(0);
+    }
+    if (res && res.status) {
+        console.error('mmdc exited with code', res.status);
+        // cleanup temp config
+        try { if (fs.existsSync(tempConfigPath)) fs.unlinkSync(tempConfigPath); } catch (e) {}
+        process.exit(res.status || 1);
+    }
+}
+
 console.error('\nFailed to run Mermaid CLI automatically.');
 console.error('You can install it locally and run it, for example:');
 console.error('  npm install -D @mermaid-js/mermaid-cli');
-console.error('  npx mmdc -i wholeflow_raw.mmd -o wholeflow.svg');
+console.error('  npx mmdc -i wholeflow_raw.mmd -o wholeflow.svg --configFile mmdc-temp-config.json');
+// try to cleanup temp config if present
+try { if (fs.existsSync(tempConfigPath)) fs.unlinkSync(tempConfigPath); } catch (e) {}
 process.exit(res && res.status ? res.status : 1);
